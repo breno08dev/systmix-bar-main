@@ -33,6 +33,7 @@ export const comandasService = {
         pagamentos(*)
       `)
       .eq('numero', numero)
+      .eq('status', 'aberta')
       .single();
     
     if (error && error.code !== 'PGRST116') throw error;

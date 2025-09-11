@@ -1,355 +1,270 @@
-import React, { useState, useEffect } from 'react';
-import { X, Plus, Minus, Trash2, CreditCard, Banknote } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Plus, Minus, Trash2, CreditCard, Banknote, QrCode, Printer } from 'lucide-react';
+import { useReactToPrint } from 'react-to-print';
 import { comandasService } from '../../services/comandas';
-import { clientesService } from '../../services/clientes';
-import { Comanda, Produto, Cliente, ItemComanda } from '../../types';
+import { Comanda, Produto, ItemComanda } from '../../types';
+import { Comprovante } from './Comprovante';
 
 interface ComandaModalProps {
-  comanda: Comanda;
+  comandaInicial: Comanda;
   produtos: Produto[];
-  clientes: Cliente[];
   onClose: () => void;
-  onComandaAtualizada: () => void;
 }
 
 export const ComandaModal: React.FC<ComandaModalProps> = ({
-  comanda,
+  comandaInicial,
   produtos,
-  clientes,
   onClose,
-  onComandaAtualizada
 }) => {
-  const [comandaAtual, setComandaAtual] = useState<Comanda>(comanda);
+  const [comandaAtual, setComandaAtual] = useState<Comanda>(comandaInicial);
   const [produtoSelecionado, setProdutoSelecionado] = useState<string>('');
-  const [nomeCliente, setNomeCliente] = useState(comanda.cliente?.nome || '');
-  const [telefoneCliente, setTelefoneCliente] = useState(comanda.cliente?.telefone || '');
   const [mostrarPagamento, setMostrarPagamento] = useState(false);
   const [metodoPagamento, setMetodoPagamento] = useState('dinheiro');
   const [valorPagamento, setValorPagamento] = useState('');
+  const [carregando, setCarregando] = useState(false);
+  
+  const comprovanteRef = useRef<HTMLDivElement>(null);
 
-  const calcularTotal = () => {
-    return comandaAtual.itens?.reduce((total, item) => 
-      total + (item.quantidade * item.valor_unit), 0
-    ) || 0;
+  useEffect(() => {
+    setComandaAtual(comandaInicial);
+  }, [comandaInicial]);
+
+const handlePrint = useReactToPrint({
+  contentRef: comprovanteRef,
+});
+  const atualizarComandaDoBanco = async () => {
+    try {
+      const comandaAtualizada = await comandasService.buscarPorNumero(comandaAtual.numero);
+      if (comandaAtualizada) setComandaAtual(comandaAtualizada);
+    } catch (error) {
+      console.error('Erro ao atualizar comanda do banco:', error);
+    }
   };
 
   const adicionarProduto = async () => {
-    if (!produtoSelecionado) return;
-
+    if (!produtoSelecionado || carregando) return;
     const produto = produtos.find(p => p.id === produtoSelecionado);
     if (!produto) return;
 
+    setCarregando(true);
     try {
-      // Verificar se o item já existe na comanda
       const itemExistente = comandaAtual.itens?.find(item => item.id_produto === produto.id);
-      
       if (itemExistente) {
-        // Atualizar quantidade
-        await comandasService.atualizarQuantidadeItem(
-          itemExistente.id, 
-          itemExistente.quantidade + 1
-        );
+        await comandasService.atualizarQuantidadeItem(itemExistente.id, itemExistente.quantidade + 1);
       } else {
-        // Adicionar novo item
         await comandasService.adicionarItem({
           id_comanda: comandaAtual.id,
           id_produto: produto.id,
           quantidade: 1,
-          valor_unit: produto.preco
+          valor_unit: produto.preco,
         });
       }
-
-      // Recarregar comanda
-      const comandaAtualizada = await comandasService.buscarPorNumero(comandaAtual.numero);
-      if (comandaAtualizada) {
-        setComandaAtual(comandaAtualizada);
-      }
-      
-      setProdutoSelecionado('');
+      await atualizarComandaDoBanco();
     } catch (error) {
       console.error('Erro ao adicionar produto:', error);
+    } finally {
+      setCarregando(false);
+      setProdutoSelecionado('');
     }
   };
 
   const alterarQuantidade = async (itemId: string, novaQuantidade: number) => {
-    if (novaQuantidade <= 0) {
-      await removerItem(itemId);
-      return;
-    }
+    if (novaQuantidade < 1) return removerItem(itemId);
 
+    setCarregando(true);
     try {
       await comandasService.atualizarQuantidadeItem(itemId, novaQuantidade);
-      
-      const comandaAtualizada = await comandasService.buscarPorNumero(comandaAtual.numero);
-      if (comandaAtualizada) {
-        setComandaAtual(comandaAtualizada);
-      }
+      await atualizarComandaDoBanco();
     } catch (error) {
       console.error('Erro ao alterar quantidade:', error);
+    } finally {
+      setCarregando(false);
     }
   };
 
   const removerItem = async (itemId: string) => {
+    setCarregando(true);
     try {
       await comandasService.removerItem(itemId);
-      
-      const comandaAtualizada = await comandasService.buscarPorNumero(comandaAtual.numero);
-      if (comandaAtualizada) {
-        setComandaAtual(comandaAtualizada);
-      }
+      await atualizarComandaDoBanco();
     } catch (error) {
       console.error('Erro ao remover item:', error);
-    }
-  };
-
-  const salvarCliente = async () => {
-    if (!nomeCliente && !telefoneCliente) return;
-
-    try {
-      let cliente = comandaAtual.cliente;
-      
-      if (!cliente && (nomeCliente || telefoneCliente)) {
-        // Buscar cliente existente por telefone ou criar novo
-        if (telefoneCliente) {
-          cliente = await clientesService.buscarPorTelefone(telefoneCliente);
-        }
-        
-        if (!cliente) {
-          cliente = await clientesService.criar({
-            nome: nomeCliente,
-            telefone: telefoneCliente
-          });
-        }
-      }
-      
-      // TODO: Atualizar comanda com cliente
-    } catch (error) {
-      console.error('Erro ao salvar cliente:', error);
+    } finally {
+      setCarregando(false);
     }
   };
 
   const fecharComanda = async () => {
-    const total = calcularTotal();
-    const valor = parseFloat(valorPagamento) || total;
+    const total = totalComanda;
+    const valorPago = parseFloat(valorPagamento) || total;
+
+    if (valorPago < total) {
+      alert('O valor pago não pode ser menor que o total da comanda.');
+      return;
+    }
     
+    setCarregando(true);
     try {
       await comandasService.fecharComanda(comandaAtual.id, [{
         id_comanda: comandaAtual.id,
         metodo: metodoPagamento,
-        valor
+        valor: total,
       }]);
-      
-      onComandaAtualizada();
+      onClose();
     } catch (error) {
       console.error('Erro ao fechar comanda:', error);
+      alert('Não foi possível fechar a comanda.');
+    } finally {
+      setCarregando(false);
     }
   };
 
-  const categoriasProdutos = produtos.reduce((acc, produto) => {
-    if (!acc[produto.categoria]) {
-      acc[produto.categoria] = [];
-    }
-    acc[produto.categoria].push(produto);
-    return acc;
-  }, {} as Record<string, Produto[]>);
+  const totalComanda = comandaAtual.itens?.reduce((total, item) => total + item.quantidade * item.valor_unit, 0) || 0;
+  const valorPagoFloat = parseFloat(valorPagamento) || 0;
+  const troco = valorPagoFloat > totalComanda ? valorPagoFloat - totalComanda : 0;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg max-w-4xl w-full max-h-screen overflow-y-auto">
-        {/* Header */}
-        <div className="p-6 border-b border-gray-200 flex items-center justify-between">
-          <div>
-            <h2 className="text-2xl font-bold text-gray-900">
-              Comanda {comandaAtual.numero}
-            </h2>
-            <p className="text-gray-600">
-              Aberta em {new Date(comandaAtual.criado_em).toLocaleString('pt-BR')}
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg"
-          >
-            <X size={24} />
-          </button>
-        </div>
+    <>
+      <div style={{ display: 'none' }}>
+        <Comprovante ref={comprovanteRef} comanda={comandaAtual} />
+      </div>
 
-        <div className="p-6 grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Lado Esquerdo - Produtos */}
-          <div>
-            <h3 className="text-lg font-bold text-gray-900 mb-4">Adicionar Produtos</h3>
-            
-            {/* Cliente */}
-            <div className="bg-gray-50 p-4 rounded-lg mb-6">
-              <h4 className="font-medium text-gray-700 mb-3">Cliente</h4>
-              <div className="space-y-3">
-                <input
-                  type="text"
-                  placeholder="Nome do cliente"
-                  value={nomeCliente}
-                  onChange={(e) => setNomeCliente(e.target.value)}
-                  onBlur={salvarCliente}
-                  className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                />
-                <input
-                  type="tel"
-                  placeholder="Telefone"
-                  value={telefoneCliente}
-                  onChange={(e) => setTelefoneCliente(e.target.value)}
-                  onBlur={salvarCliente}
-                  className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                />
-              </div>
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] flex flex-col">
+          <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900">Comanda {comandaAtual.numero}</h2>
+              <p className="text-gray-600">{comandaAtual.cliente?.nome || 'Cliente não informado'}</p>
             </div>
-
-            {/* Adicionar Produto */}
-            <div className="flex gap-2 mb-6">
-              <select
-                value={produtoSelecionado}
-                onChange={(e) => setProdutoSelecionado(e.target.value)}
-                className="flex-1 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-              >
-                <option value="">Selecionar produto...</option>
-                {Object.entries(categoriasProdutos).map(([categoria, produtosCategoria]) => (
-                  <optgroup key={categoria} label={categoria}>
-                    {produtosCategoria.map(produto => (
-                      <option key={produto.id} value={produto.id}>
-                        {produto.nome} - R$ {produto.preco.toFixed(2)}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-              <button
-                onClick={adicionarProduto}
-                disabled={!produtoSelecionado}
-                className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
-              >
-                <Plus size={20} />
+            <div className="flex items-center gap-2">
+              <button onClick={handlePrint} className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg" title="Imprimir Comprovante">
+                <Printer size={20} />
               </button>
+              <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg"><X size={24} /></button>
             </div>
           </div>
 
-          {/* Lado Direito - Itens da Comanda */}
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-gray-900">Itens da Comanda</h3>
-              <div className="text-2xl font-bold text-green-600">
-                R$ {calcularTotal().toFixed(2)}
+          <div className="p-6 grid grid-cols-1 lg:grid-cols-2 gap-8 overflow-y-auto flex-1">
+            <div>
+              <h3 className="text-lg font-bold text-gray-900 mb-4">Adicionar Produtos</h3>
+              <div className="flex gap-2 mb-6">
+                <select 
+                  value={produtoSelecionado} 
+                  onChange={(e) => setProdutoSelecionado(e.target.value)} 
+                  className="flex-1 p-3 border border-gray-300 rounded-lg"
+                  disabled={carregando}
+                >
+                  <option value="">Selecione um produto...</option>
+                  {Object.entries(produtos.reduce((acc, produto) => {
+                    if (!acc[produto.categoria]) acc[produto.categoria] = [];
+                    acc[produto.categoria].push(produto);
+                    return acc;
+                  }, {} as Record<string, Produto[]>)).map(([categoria, produtosCategoria]) => (
+                    <optgroup key={categoria} label={categoria}>
+                      {produtosCategoria.map(produto => <option key={produto.id} value={produto.id}>{produto.nome} - R$ {produto.preco.toFixed(2)}</option>)}
+                    </optgroup>
+                  ))}
+                </select>
+                <button 
+                  onClick={adicionarProduto} 
+                  disabled={!produtoSelecionado || carregando} 
+                  className="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 disabled:bg-gray-300"
+                >
+                  {carregando ? '...' : <Plus size={20} />}
+                </button>
               </div>
             </div>
 
-            <div className="space-y-3 mb-6">
-              {comandaAtual.itens?.map(item => (
-                <div key={item.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                  <div className="flex-1">
-                    <p className="font-medium text-gray-900">{item.produto?.nome}</p>
-                    <p className="text-sm text-gray-500">R$ {item.valor_unit.toFixed(2)}</p>
-                  </div>
-                  
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => alterarQuantidade(item.id, item.quantidade - 1)}
-                      className="p-1 hover:bg-gray-200 rounded"
-                    >
-                      <Minus size={16} />
-                    </button>
-                    
-                    <span className="w-8 text-center font-medium">{item.quantidade}</span>
-                    
-                    <button
-                      onClick={() => alterarQuantidade(item.id, item.quantidade + 1)}
-                      className="p-1 hover:bg-gray-200 rounded"
-                    >
-                      <Plus size={16} />
-                    </button>
-                    
-                    <button
-                      onClick={() => removerItem(item.id)}
-                      className="p-1 hover:bg-red-100 text-red-600 rounded ml-2"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                    
-                    <div className="w-20 text-right font-medium">
-                      R$ {(item.quantidade * item.valor_unit).toFixed(2)}
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-bold text-gray-900">Itens da Comanda</h3>
+                <div className="text-2xl font-bold text-green-600">R$ {totalComanda.toFixed(2).replace('.', ',')}</div>
+              </div>
+
+              {/* ----- SEÇÃO ATUALIZADA ----- */}
+              <div className="space-y-3 mb-6 max-h-96 overflow-y-auto">
+                {comandaAtual.itens && comandaAtual.itens.length > 0 ? comandaAtual.itens.map(item => (
+                  <div key={item.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div className="flex-1">
+                      <p className="font-medium text-gray-900">{item.produto?.nome}</p>
+                      <p className="text-sm text-gray-500">R$ {item.valor_unit.toFixed(2).replace('.', ',')} cada</p>
                     </div>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => alterarQuantidade(item.id, item.quantidade - 1)} 
+                        disabled={carregando}
+                        className="p-1 hover:bg-gray-200 rounded disabled:opacity-50"
+                      >
+                        <Minus size={16} />
+                      </button>
+                      <span className="w-8 text-center font-medium">{item.quantidade}</span>
+                      <button 
+                        onClick={() => alterarQuantidade(item.id, item.quantidade + 1)} 
+                        disabled={carregando}
+                        className="p-1 hover:bg-gray-200 rounded disabled:opacity-50"
+                      >
+                        <Plus size={16} />
+                      </button>
+                      <button 
+                        onClick={() => removerItem(item.id)} 
+                        disabled={carregando}
+                        className="p-1 hover:bg-red-100 text-red-600 rounded ml-2 disabled:opacity-50"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                      <div className="w-20 text-right font-medium text-green-600">
+                        R$ {(item.quantidade * item.valor_unit).toFixed(2).replace('.', ',')}
+                      </div>
+                    </div>
+                  </div>
+                )) : <p className="text-gray-500 text-center py-8">Nenhum item adicionado</p>}
+              </div>
+            </div>
+          </div>
+
+          {(comandaAtual.itens?.length || 0) > 0 && (
+            <div className="p-6 border-t border-gray-200">
+              {!mostrarPagamento ? (
+                <button 
+                  onClick={() => setMostrarPagamento(true)} 
+                  disabled={carregando}
+                  className="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium text-lg disabled:bg-gray-300"
+                >
+                  {carregando ? 'Carregando...' : `Finalizar Pagamento - R$ ${totalComanda.toFixed(2).replace('.', ',')}`}
+                </button>
+              ) : (
+                <div className="space-y-4">
+                  <h4 className="text-lg font-semibold text-gray-800">Finalizar Pagamento</h4>
+                  <div className="grid grid-cols-3 gap-3">
+                    <button onClick={() => setMetodoPagamento('dinheiro')} className={`p-3 rounded-lg border-2 flex items-center justify-center gap-2 transition-all ${metodoPagamento === 'dinheiro' ? 'border-amber-500 bg-amber-50' : 'border-gray-300 hover:border-gray-400'}`}><Banknote size={20} /> Dinheiro</button>
+                    <button onClick={() => setMetodoPagamento('cartao')} className={`p-3 rounded-lg border-2 flex items-center justify-center gap-2 transition-all ${metodoPagamento === 'cartao' ? 'border-amber-500 bg-amber-50' : 'border-gray-300 hover:border-gray-400'}`}><CreditCard size={20} /> Cartão</button>
+                    <button onClick={() => setMetodoPagamento('pix')} className={`p-3 rounded-lg border-2 flex items-center justify-center gap-2 transition-all ${metodoPagamento === 'pix' ? 'border-amber-500 bg-amber-50' : 'border-gray-300 hover:border-gray-400'}`}><QrCode size={20} /> PIX</button>
+                  </div>
+                  <div className="bg-gray-50 p-4 rounded-lg">
+                    <div className="flex justify-between items-center">
+                      <label htmlFor="valorPago" className="text-sm font-medium text-gray-600">Valor a Pagar</label>
+                      <span className="text-xl font-bold text-gray-800">R$ {totalComanda.toFixed(2).replace('.', ',')}</span>
+                    </div>
+                    <input id="valorPago" type="number" placeholder="Valor entregue pelo cliente" value={valorPagamento} onChange={(e) => setValorPagamento(e.target.value)} className="w-full p-3 mt-2 border border-gray-300 rounded-lg text-lg"/>
+                    {metodoPagamento === 'dinheiro' && troco > 0 && (
+                      <div className="flex justify-between items-center mt-3 text-blue-600">
+                        <span className="font-medium">Troco:</span>
+                        <span className="font-bold text-xl">R$ {troco.toFixed(2).replace('.', ',')}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex gap-3">
+                    <button onClick={() => setMostrarPagamento(false)} className="flex-1 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-medium">Cancelar</button>
+                    <button onClick={fecharComanda} disabled={carregando} className="flex-1 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium disabled:bg-gray-300">
+                      {carregando ? 'Processando...' : 'Confirmar Pagamento'}
+                    </button>
                   </div>
                 </div>
-              )) || (
-                <p className="text-gray-500 text-center py-8">Nenhum item adicionado</p>
               )}
             </div>
-
-            {/* Pagamento */}
-            {(comandaAtual.itens?.length || 0) > 0 && (
-              <div className="border-t border-gray-200 pt-6">
-                {!mostrarPagamento ? (
-                  <button
-                    onClick={() => setMostrarPagamento(true)}
-                    className="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium"
-                  >
-                    Fechar Comanda - R$ {calcularTotal().toFixed(2)}
-                  </button>
-                ) : (
-                  <div className="space-y-4">
-                    <h4 className="font-medium text-gray-700">Finalizar Pagamento</h4>
-                    
-                    <div className="grid grid-cols-2 gap-3">
-                      <button
-                        onClick={() => setMetodoPagamento('dinheiro')}
-                        className={`p-3 rounded-lg border-2 flex items-center justify-center gap-2 ${
-                          metodoPagamento === 'dinheiro'
-                            ? 'border-amber-500 bg-amber-50'
-                            : 'border-gray-300'
-                        }`}
-                      >
-                        <Banknote size={20} />
-                        Dinheiro
-                      </button>
-                      
-                      <button
-                        onClick={() => setMetodoPagamento('cartao')}
-                        className={`p-3 rounded-lg border-2 flex items-center justify-center gap-2 ${
-                          metodoPagamento === 'cartao'
-                            ? 'border-amber-500 bg-amber-50'
-                            : 'border-gray-300'
-                        }`}
-                      >
-                        <CreditCard size={20} />
-                        Cartão
-                      </button>
-                    </div>
-                    
-                    <input
-                      type="number"
-                      placeholder={`Valor (R$ ${calcularTotal().toFixed(2)})`}
-                      value={valorPagamento}
-                      onChange={(e) => setValorPagamento(e.target.value)}
-                      className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
-                    />
-                    
-                    <div className="flex gap-3">
-                      <button
-                        onClick={() => setMostrarPagamento(false)}
-                        className="flex-1 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
-                      >
-                        Cancelar
-                      </button>
-                      <button
-                        onClick={fecharComanda}
-                        className="flex-1 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700"
-                      >
-                        Confirmar Pagamento
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          )}
         </div>
       </div>
-    </div>
+    </>
   );
 };

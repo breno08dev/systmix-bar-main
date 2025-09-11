@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Receipt, Package, Users, TrendingUp } from 'lucide-react';
+import { Receipt, Package, Users, TrendingUp, Eye, EyeOff } from 'lucide-react';
 import { comandasService } from '../../services/comandas';
 import { produtosService } from '../../services/produtos';
 import { clientesService } from '../../services/clientes';
+import { relatoriosService } from '../../services/relatorios'; // Importado
 import { Comanda } from '../../types';
 
 export const Dashboard: React.FC = () => {
@@ -13,6 +14,7 @@ export const Dashboard: React.FC = () => {
     faturamentoDia: 0
   });
   const [comandasRecentes, setComandasRecentes] = useState<Comanda[]>([]);
+  const [faturamentoVisivel, setFaturamentoVisivel] = useState(true); // Estado para controlar a visibilidade
 
   useEffect(() => {
     carregarDados();
@@ -20,20 +22,27 @@ export const Dashboard: React.FC = () => {
 
   const carregarDados = async () => {
     try {
-      const [comandas, produtos, clientes] = await Promise.all([
+      // Busca todos os dados em paralelo
+      const [comandas, produtos, clientes, faturamentoHoje] = await Promise.all([
         comandasService.listarAbertas(),
         produtosService.listar(),
-        clientesService.listar()
+        clientesService.listar(),
+        relatoriosService.obterFaturamentoHoje() // Usando a nova função
       ]);
 
       setStats({
         comandasAbertas: comandas.length,
         totalProdutos: produtos.filter(p => p.ativo).length,
         totalClientes: clientes.length,
-        faturamentoDia: 0 // TODO: calcular faturamento do dia
+        faturamentoDia: faturamentoHoje
       });
 
-      setComandasRecentes(comandas.slice(0, 5));
+      // Ordena as comandas por data de criação para mostrar as mais recentes
+      const comandasOrdenadas = comandas.sort((a, b) => 
+        new Date(b.criado_em).getTime() - new Date(a.criado_em).getTime()
+      );
+      setComandasRecentes(comandasOrdenadas.slice(0, 5));
+
     } catch (error) {
       console.error('Erro ao carregar dados do dashboard:', error);
     }
@@ -41,15 +50,24 @@ export const Dashboard: React.FC = () => {
 
   const StatCard: React.FC<{
     title: string;
-    value: number;
+    value: string | number; // Alterado para aceitar string
     icon: React.ElementType;
     color: string;
-  }> = ({ title, value, icon: Icon, color }) => (
+    onToggleVisibility?: () => void; // Prop opcional para o botão de visibilidade
+    isVisibilityToggleable?: boolean; // Prop para saber se o card tem o botão
+  }> = ({ title, value, icon: Icon, color, onToggleVisibility, isVisibilityToggleable }) => (
     <div className="bg-white rounded-lg shadow-md p-6">
       <div className="flex items-center justify-between">
         <div>
           <p className="text-sm font-medium text-gray-600">{title}</p>
-          <p className="text-3xl font-bold text-gray-900">{value}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-3xl font-bold text-gray-900">{value}</p>
+            {isVisibilityToggleable && (
+              <button onClick={onToggleVisibility} className="text-gray-400 hover:text-gray-600">
+                {faturamentoVisivel ? <EyeOff size={20} /> : <Eye size={20} />}
+              </button>
+            )}
+          </div>
         </div>
         <div className={`p-3 rounded-full ${color}`}>
           <Icon className="w-6 h-6 text-white" />
@@ -86,19 +104,21 @@ export const Dashboard: React.FC = () => {
         />
         <StatCard
           title="Faturamento Hoje"
-          value={stats.faturamentoDia}
+          value={faturamentoVisivel ? `R$ ${stats.faturamentoDia.toFixed(2)}` : 'R$ ****'}
           icon={TrendingUp}
           color="bg-amber-500"
+          isVisibilityToggleable={true}
+          onToggleVisibility={() => setFaturamentoVisivel(!faturamentoVisivel)}
         />
       </div>
 
       <div className="bg-white rounded-lg shadow-md">
         <div className="p-6 border-b border-gray-200">
-          <h2 className="text-xl font-bold text-gray-900">Comandas Recentes</h2>
+          <h2 className="text-xl font-bold text-gray-900">Últimas Comandas Abertas</h2>
         </div>
         <div className="p-6">
           {comandasRecentes.length === 0 ? (
-            <p className="text-gray-500 text-center">Nenhuma comanda aberta</p>
+            <p className="text-gray-500 text-center py-8">Nenhuma comanda aberta no momento</p>
           ) : (
             <div className="space-y-4">
               {comandasRecentes.map(comanda => (

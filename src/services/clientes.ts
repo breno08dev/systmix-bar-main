@@ -44,5 +44,23 @@ export const clientesService = {
     
     if (error) throw error;
     return data;
+  },
+
+  // NOVA FUNÇÃO
+  async deletar(id: string): Promise<void> {
+    const { error } = await supabase
+      .from('clientes')
+      .delete()
+      .eq('id', id);
+    
+    if (error) {
+      // Adiciona um log de erro mais detalhado
+      console.error("Erro no Supabase ao deletar cliente:", error.message);
+      // Informa ao usuário sobre o problema de chave estrangeira
+      if (error.code === '23503') { // Código de erro para violação de chave estrangeira no PostgreSQL
+        throw new Error('Não é possível excluir este cliente, pois ele está associado a uma ou mais comandas.');
+      }
+      throw error;
+    }
   }
 };

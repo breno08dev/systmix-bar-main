@@ -1,14 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Users, Phone, Calendar } from 'lucide-react';
+import { Plus, Users, Phone, Calendar, Trash2 } from 'lucide-react';
 import { clientesService } from '../../services/clientes';
 import { Cliente } from '../../types';
 import { ClienteModal } from './ClienteModal';
+import { ConfirmacaoModal } from '../Common/ConfirmacaoModal'; // Importar o novo modal
 
 export const Clientes: React.FC = () => {
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [modalAberto, setModalAberto] = useState(false);
   const [clienteEdicao, setClienteEdicao] = useState<Cliente | null>(null);
   const [busca, setBusca] = useState('');
+  
+  // Estados para controlar o modal de confirmação de exclusão
+  const [modalExcluirAberto, setModalExcluirAberto] = useState(false);
+  const [clienteParaExcluir, setClienteParaExcluir] = useState<Cliente | null>(null);
 
   useEffect(() => {
     carregarClientes();
@@ -32,6 +37,28 @@ export const Clientes: React.FC = () => {
   const editarCliente = (cliente: Cliente) => {
     setClienteEdicao(cliente);
     setModalAberto(true);
+  };
+
+  // Abre o modal de confirmação
+  const handleAbrirModalExcluir = (evento: React.MouseEvent, cliente: Cliente) => {
+    evento.stopPropagation();
+    setClienteParaExcluir(cliente);
+    setModalExcluirAberto(true);
+  };
+
+  // Executa a exclusão após confirmação
+  const handleConfirmarExclusao = async () => {
+    if (!clienteParaExcluir) return;
+    try {
+      await clientesService.deletar(clienteParaExcluir.id);
+      carregarClientes();
+    } catch (error: any) {
+      console.error('Erro ao excluir cliente:', error);
+      alert(error.message);
+    } finally {
+      setModalExcluirAberto(false);
+      setClienteParaExcluir(null);
+    }
   };
 
   const clientesFiltrados = clientes.filter(cliente =>
@@ -59,27 +86,23 @@ export const Clientes: React.FC = () => {
           </button>
         </div>
 
-        {/* Busca */}
         <div className="max-w-md">
           <input
             type="text"
             placeholder="Buscar cliente por nome ou telefone..."
             value={busca}
             onChange={(e) => setBusca(e.target.value)}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-amber-500"
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500"
           />
         </div>
       </div>
 
-      {/* Lista de Clientes */}
       <div className="bg-white rounded-lg shadow-md">
         <div className="p-6">
           {clientesFiltrados.length === 0 ? (
             <div className="text-center py-12">
               <Users className="mx-auto h-12 w-12 text-gray-400 mb-4" />
-              <p className="text-gray-500">
-                {busca ? 'Nenhum cliente encontrado' : 'Nenhum cliente cadastrado'}
-              </p>
+              <p className="text-gray-500">{busca ? 'Nenhum cliente encontrado' : 'Nenhum cliente cadastrado'}</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -87,32 +110,28 @@ export const Clientes: React.FC = () => {
                 <div
                   key={cliente.id}
                   onClick={() => editarCliente(cliente)}
-                  className="border border-gray-200 rounded-lg p-4 cursor-pointer hover:border-amber-400 hover:bg-amber-50 transition-colors"
+                  className="group border border-gray-200 rounded-lg p-4 cursor-pointer hover:border-amber-400 hover:bg-amber-50 transition-colors relative"
                 >
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex-1">
-                      <h3 className="font-bold text-gray-900">{cliente.nome}</h3>
-                      
-                      {cliente.telefone && (
-                        <div className="flex items-center gap-1 text-gray-600 mt-1">
-                          <Phone size={14} />
-                          <span className="text-sm">{cliente.telefone}</span>
-                        </div>
-                      )}
-                      
-                      <div className="flex items-center gap-1 text-gray-500 mt-2">
-                        <Calendar size={14} />
-                        <span className="text-xs">
-                          Cadastrado em {new Date(cliente.criado_em).toLocaleDateString('pt-BR')}
-                        </span>
-                      </div>
+                  <button
+                    onClick={(e) => handleAbrirModalExcluir(e, cliente)}
+                    className="absolute top-2 right-2 p-2 text-gray-400 hover:text-red-600 hover:bg-red-100 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Excluir cliente"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+
+                  <h3 className="font-bold text-gray-900 pr-8">{cliente.nome}</h3>
+                  {cliente.telefone && (
+                    <div className="flex items-center gap-1 text-gray-600 mt-1">
+                      <Phone size={14} /><span className="text-sm">{cliente.telefone}</span>
                     </div>
+                  )}
+                  <div className="flex items-center gap-1 text-gray-500 mt-2">
+                    <Calendar size={14} />
+                    <span className="text-xs">Cadastrado em {new Date(cliente.criado_em).toLocaleDateString('pt-BR')}</span>
                   </div>
-                  
-                  <div className="pt-3 border-t border-gray-100">
-                    <p className="text-sm text-gray-500">
-                      Clique para ver detalhes e histórico
-                    </p>
+                  <div className="pt-3 border-t border-gray-100 mt-3">
+                    <p className="text-sm text-gray-500">Clique para editar</p>
                   </div>
                 </div>
               ))}
@@ -121,15 +140,20 @@ export const Clientes: React.FC = () => {
         </div>
       </div>
 
-      {/* Modal */}
       {modalAberto && (
         <ClienteModal
           cliente={clienteEdicao}
-          onClose={() => {
-            setModalAberto(false);
-            setClienteEdicao(null);
-          }}
+          onClose={() => { setModalAberto(false); setClienteEdicao(null); }}
           onClienteSalvo={handleClienteSalvo}
+        />
+      )}
+
+      {modalExcluirAberto && clienteParaExcluir && (
+        <ConfirmacaoModal
+          titulo="Excluir Cliente"
+          mensagem={`Tem certeza que deseja excluir "${clienteParaExcluir.nome}"? Esta ação não pode ser desfeita.`}
+          onConfirm={handleConfirmarExclusao}
+          onClose={() => setModalExcluirAberto(false)}
         />
       )}
     </div>

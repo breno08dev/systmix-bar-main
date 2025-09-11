@@ -49,4 +49,5 @@ export interface RelatorioVendas {
   total_comandas: number;
   item_mais_vendido: string;
   ticket_medio: number;
+  media_itens_comanda: number; // NOVO CAMPO
 }

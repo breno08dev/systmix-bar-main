@@ -31,7 +31,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <div className="w-64 bg-gray-900 text-white h-screen flex flex-col">
       <div className="p-6 border-b border-gray-700">
-        <h1 className="text-2xl font-bold text-amber-400">BarManager</h1>
+        <h1 className="text-2xl font-bold text-amber-400">SystMix</h1>
       </div>
       
       <nav className="flex-1 p-4">
